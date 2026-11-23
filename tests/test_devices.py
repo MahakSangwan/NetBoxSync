@@ -367,3 +367,17 @@ def test_verify_device_never_appears() -> None:
     )
     assert result.device is None
     assert not result.ok
+
+
+def test_edited_serial_is_warned_about() -> None:
+    report = run_check(make_input(), netbox([record(serial="TYPO1")]))
+    assert report.ok
+    assert report.warnings == [
+        f"device {HOSTNAME!r}: serial in NetBox is 'TYPO1', the device reports {SERIAL!r}; "
+        "it will be overwritten"
+    ]
+
+
+def test_chassis_swap_is_not_also_a_serial_warning() -> None:
+    report = run_check(make_input(), netbox([record(chassis_serial="OLD1", serial="OLD1")]))
+    assert report.warnings == []

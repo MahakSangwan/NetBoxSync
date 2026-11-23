@@ -171,6 +171,12 @@ def _identify(
             f"device {hostname!r} ({_describe(serialed)})"
             + (f": {', '.join(changes)}" if changes else "")
         )
+        if serialed.serial != serial:
+            # chassis_serial is right, so `serial` was edited in NetBox (D21).
+            report.warnings.append(
+                f"device {hostname!r}: serial in NetBox is {serialed.serial!r}, the device "
+                f"reports {serial!r}; it will be overwritten"
+            )
         return serialed
     if named is not None:
         if named.name != hostname:
