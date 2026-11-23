@@ -1,0 +1,43 @@
+# Decision log
+
+Agreed design decisions for NetBoxSync. Add an entry when a decision is made
+or changed; don't rewrite history, supersede it.
+
+## Context
+
+NetBoxSync populates an empty NetBox from live devices: data is collected
+with netsdk (github.com/MahakSangwan/NetworkSDK) and written through Diode.
+Later phases (drift detection, config push) build on it. ~200-300 devices:
+Cisco IOS, NX-OS, ASA, WLC, Fortinet, F5 BIG-IP; IOS and NX-OS first, others
+as their SDK drivers ship. Devices are onboarded one at a time.
+
+Neither the devices nor NetBox are reachable from development. Mahak runs
+every live test by hand and reports back; everything else is tested offline.
+
+Work is split into slices, one NetBox area each, agreed before coding:
+0 foundation (no NetBox data), 1 devices (with site, location, rack, role,
+manufacturer, device type, platform), 2 interfaces, 3 LAGs, 4 VRFs, IPs and
+primary IP, 5 VLANs, 6 inventory items/modules, 7 cables (CDP/LLDP), 8 vPC
+and FEX. Order may change.
+
+Versions (2026-11-23): NetBox community 4.6.0, Diode server 2.4.1 (pinned
+through `DIODE_TAG`), Diode NetBox plugin 1.18.1, netboxlabs-diode-sdk
+1.14.x, netsdk v0.1.0, Python 3.14.
+
+## Decisions
+
+| # | Decision | Notes |
+|---|----------|-------|
+| D1 | Writes go through Diode; NetBox is read through pynetbox, read-only | Agreed 2026-11-23. The Diode SDK has typed entities and creates referenced objects itself. pynetbox (read-only token) checks inputs before ingest (D4) and verifies results after it: Diode is asynchronous, so an accepted `ingest()` only means the request was queued. A direct NetBox write is allowed only where Diode can't do the job (e.g. deleting), each one recorded here. |
+| D2 | Collect and ingest are separate steps, joined by a JSON snapshot | Agreed 2026-11-23. `collect` runs every getter the driver has and writes `snapshots/<label>/<UTC timestamp>.json` (never overwritten); `ingest` reads one back. Results are stored with each getter's status (`ok`, `not_supported`, `error`) and read back through the SDK's own models, so ingest code sees exactly what a live run returns. A snapshot whose data no longer validates against the installed SDK is an error, not a guess. Raw output isn't stored: the SDK's session logs have it byte-exact, and the snapshot records which log belongs to it. |
+| D3 | One YAML file per device, kept in a separate repo | Agreed 2026-11-23. What devices can't report is written by hand: SSH access (host, port, username, key file), site, region, location, rack, position/face, role, status (default `active`), management interface, and what the run may create (D4). The driver is named explicitly, never autodetected. Unknown keys are errors. The key passphrase only comes from `NETBOXSYNC_KEY_PASSPHRASE`. A device is labelled by its file name (`nyc-core-01.yaml` -> `nyc-core-01`), which names its snapshots and log lines. Tenants: not now. |
+| D4 | Every reference object is checked against NetBox before ingest | Agreed 2026-11-23. Diode creates any object it is given a name for, so a typo would become a new site. `check` (also run by `ingest`) looks up region, site, location (in its site), rack (in its site, and in its location if one is given) and role by exact name. Missing is an error unless its kind is listed under `create:`. A name differing from an existing one only by case is always an error (NetBox names are case-insensitively unique). Objects inside a site that will be created must be creatable too. A given region must be the existing site's region. Several matches is an error. `ingest --no-check` only with `--dry-run`. Rack position occupancy is checked in the devices slice, which knows the hostname and the device's height. |
+| D5 | Devices are reached through CyberArk PSM | Agreed 2026-11-23. The SSH host is the PSM jumphost; the target device is part of the username. Consequences: every device shares the jumphost's host key in `~/.netsdk/known_hosts`; SDK errors name the PSM host and session logs are named `<psm host>_<timestamp>.log` (unique, but not by device). Our logs label devices by file name, and the snapshot records its session log. The SDK side is a known nuisance, to be fixed in the SDK later (Mahak). |
+| D6 | Primary IP: `management_interface`, else `mgmt0`, else fail | Agreed 2026-11-23, implemented with the IP slice. The SSH host is the jumphost (D5), so it can't identify the management address; the target in the PSM username is an IP today but that isn't guaranteed. Order: the device file's `management_interface`; otherwise `mgmt0` if it exists and has an address; otherwise the run stops and lists the interfaces that have addresses, to be written into the device file. No interactive prompt: the device file stays the full record. |
+| D7 | Device types are built from device data; physical facts from `device_types.yaml` | Agreed 2026-11-23. The community devicetype-library has wrong components (e.g. `mgmt1`, `management0/1` where devices have `mgmt0`), and Diode can't create component templates anyway, so types carry no templates and every interface comes from the live device. Adding devices by hand in NetBox then creates no interfaces; accepted, this script onboards devices. Height, airflow and full depth belong to the model, so they live in one optional file keyed by part number, not per device; NetBox defaults apply otherwise. |
+| D8 | Collect failures: facts required, connection errors abort, the rest are recorded | Agreed 2026-11-23. A failed `facts` aborts (no hostname, nothing to ingest). A connection or timeout error aborts with no snapshot: the session can't be trusted after it and a half snapshot is easy to mistake for a whole one. Any other getter failure (incl. an SDK model validation error, an SDK bug) is recorded and the next getter runs; each slice decides at ingest whether it can do without that data. |
+| D9 | Everything written is traceable | Agreed 2026-11-23. Every entity carries the `netboxsync` tag; every request carries `run_id`, `device_label`, the snapshot file name and our version as request metadata. Requests are chunked under gRPC's 4 MB limit with the SDK's `create_message_chunks`; a chunk Diode rejects stops the run and names the run ID (earlier chunks of that run were accepted). NetBox branching is not used for now. |
+| D10 | Platforms: OS family with one child per version | Agreed 2026-11-23, implemented with the devices slice. E.g. `Cisco NX-OS` > `Cisco NX-OS 9.3(9)`; the device gets the version platform. An upgrade changes the device's platform. |
+| D11 | Device name is the hostname exactly as reported | Agreed 2026-11-23. FQDN kept if the device reports one. If Diode's device matching makes this a problem (a domain added later would create a second device), strip the domain instead (Mahak is fine with either). Tested live with the devices slice. |
+| D12 | VLANs: no consolidation for now | Agreed 2026-11-23. Same-ID VLANs from different devices may be separate NetBox VLANs; whether and how to merge shared ones is decided later. |
+| D13 | Cables are a separate run | Agreed 2026-11-23. Built from CDP/LLDP once both ends exist in NetBox: after onboarding, or on demand. Only device-to-device links. |

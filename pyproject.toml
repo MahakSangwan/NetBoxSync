@@ -1,0 +1,64 @@
+[project]
+name = "netboxsync"
+version = "0.1.0"
+description = "Populate NetBox from live network devices via netsdk and Diode"
+readme = "README.md"
+authors = [
+    { name = "Mahak", email = "mousamsangwan11@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "netsdk-cisco-ios",
+    "netsdk-cisco-nxos",
+    "netboxlabs-diode-sdk>=1.14,<2",
+    "pynetbox>=7.5,<8",
+    "pydantic>=2.11,<3",
+    "pyyaml>=6.0,<7",
+]
+
+[project.scripts]
+netboxsync = "netboxsync.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+# Every netsdk package from the same tag (SDK D49).
+netsdk-cisco-ios = { git = "https://github.com/MahakSangwan/NetworkSDK", tag = "v0.1.0", subdirectory = "packages/cisco-ios" }
+netsdk-cisco-nxos = { git = "https://github.com/MahakSangwan/NetworkSDK", tag = "v0.1.0", subdirectory = "packages/cisco-nxos" }
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pytest>=8.4",
+    "ruff>=0.14",
+    "types-pyyaml>=6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF", "N", "PT"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["netboxsync"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Ship no type information.
+module = ["pynetbox.*", "netboxlabs.*", "ntc_templates.*", "textfsm.*", "genie.*", "pyats.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not live"]
+markers = [
+    "live: needs real devices, NetBox or Diode; run by hand with `-m live`",
+]

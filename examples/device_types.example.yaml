@@ -1,0 +1,9 @@
+# Physical facts no device reports, per part number (D7). Optional; NetBox
+# defaults apply to models not listed.
+device_types:
+  N9K-C93180YC-EX:
+    u_height: 1
+    airflow: front-to-rear
+    is_full_depth: true
+  WS-C3850-24T:
+    u_height: 1

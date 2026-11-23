@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+# Runtime output: device data and session recordings stay off git.
+snapshots/
+session_logs/
+dryrun/

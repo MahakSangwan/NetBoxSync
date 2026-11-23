@@ -1,0 +1,22 @@
+# One file per device (D3). The file name is the device's label:
+# nyc-core-01.yaml -> snapshots/nyc-core-01/...
+
+driver: cisco-nxos                  # cisco-ios | cisco-nxos
+host: psm.example.net               # the CyberArk PSM jumphost (D5)
+port: 22
+username: "netops@192.0.2.10@psm.example.net"
+key_file: ~/.ssh/netops_ed25519     # passphrase: NETBOXSYNC_KEY_PASSPHRASE
+
+site: NYC-DC01
+region: US-East                     # optional; must be the site's region
+location: Hall-A                    # optional
+rack: A-12                          # optional
+position: 30                        # optional; needs rack and face
+face: front                         # front | rear
+role: core-switch                   # optional
+status: active                      # default: active
+management_interface: mgmt0         # optional; needed when there's no mgmt0 (D6)
+
+# Reference objects this run may create if NetBox doesn't have them (D4):
+# region, site, location, rack, role. Anything else missing is an error.
+create: []
