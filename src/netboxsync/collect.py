@@ -30,6 +30,10 @@ from netboxsync.snapshot import GetterResult, GetterStatus, Snapshot, dump_resul
 log = logging.getLogger(__name__)
 
 REQUIRED_GETTERS = frozenset({"facts"})
+#: Seconds, for every device (D15). The SDK uses one value for the SSH
+#: connect/auth/banner timeouts and for each command's whole output; its 30 s
+#: default is too short for `show interface | json` on large NX-OS boxes.
+DEVICE_TIMEOUT = 120.0
 
 
 class CollectError(Exception):
@@ -43,6 +47,7 @@ def open_device(device_file: DeviceFile, session_log_dir: Path) -> Device:
         device_file.host,
         device_file.credentials(),
         port=device_file.port,
+        timeout=DEVICE_TIMEOUT,
         session_log_dir=session_log_dir,
     )
 

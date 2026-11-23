@@ -11,7 +11,7 @@ from netsdk.core import (
     ParseError,
 )
 
-from netboxsync.collect import CollectError, collect, open_device
+from netboxsync.collect import DEVICE_TIMEOUT, CollectError, collect, open_device
 from netboxsync.drivers import DRIVERS
 from netboxsync.snapshot import GetterStatus
 from tests.conftest import device_file, ip_addresses, nxos_facts, nxos_interfaces
@@ -120,6 +120,7 @@ def test_open_device_uses_the_sdk_class_and_psm_host(tmp_path: Path) -> None:
     assert type(device) is NXOS.device_class
     assert device.host == "psm.example.net"
     assert device.port == 2222
+    assert device.timeout == DEVICE_TIMEOUT == 120.0
     assert device.credentials.username == "netops@10.0.0.5@psm.example.net"
     assert device.session_log_dir == tmp_path
     assert not device.is_open

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from netboxlabs.diode.sdk.ingester import Entity, Site, Tag
 
-from netboxsync import cli, ingest
+from netboxsync import cli, ingest, netbox
 from netboxsync.diode import TAG, DryRunIngester, IngestError, send
 from netboxsync.snapshot import write_snapshot
 from tests.test_netbox_check import NETBOX
@@ -99,7 +99,7 @@ def test_no_check_needs_dry_run(workdir: Path) -> None:
 
 def test_ingest_runs_the_check_first(workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (workdir / "sw1.yaml").write_text(DEVICE_YAML.replace("NYC-DC01", "NYC-DC1"))
-    monkeypatch.setattr(cli.PynetboxReader, "from_env", classmethod(lambda cls: NETBOX))
+    monkeypatch.setattr(netbox.PynetboxReader, "from_env", classmethod(lambda cls: NETBOX))
     monkeypatch.setattr(ingest, "SLICES", [("test", lambda df, snap: [site_entity()])])
     assert cli.main(["ingest", "sw1.yaml", "--dry-run"]) == cli.EXIT_FAILED
     assert not (workdir / "dryrun").exists()
