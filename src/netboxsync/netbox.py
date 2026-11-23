@@ -17,9 +17,12 @@ from typing import Any, Protocol
 import pynetbox
 
 from netboxsync.config import Creatable, DeviceFile
+from netboxsync.tls import ca_file_from_env, warn_if_overridden
 
 NETBOX_URL_ENV = "NETBOX_URL"
 NETBOX_TOKEN_ENV = "NETBOX_TOKEN"
+#: CA (or self-signed certificate) for NetBox's HTTPS, when not publicly trusted.
+NETBOX_CA_FILE_ENV = "NETBOX_CA_FILE"
 
 
 class NetBoxError(Exception):
@@ -66,8 +69,15 @@ class PynetboxReader:
         token = os.environ.get(NETBOX_TOKEN_ENV)
         if not url or not token:
             raise NetBoxError(f"set {NETBOX_URL_ENV} and {NETBOX_TOKEN_ENV}")
-        # TLS: requests honours REQUESTS_CA_BUNDLE for a private CA.
-        return cls(pynetbox.api(url, token=token))
+        api = pynetbox.api(url, token=token)
+        try:
+            ca_file = ca_file_from_env(NETBOX_CA_FILE_ENV)
+        except FileNotFoundError as exc:
+            raise NetBoxError(str(exc)) from exc
+        if ca_file:
+            api.http_session.verify = str(ca_file)
+        warn_if_overridden(NETBOX_CA_FILE_ENV)
+        return cls(api)
 
     def find(
         self, kind: Creatable, name: str, *, site_id: int | None = None, ignore_case: bool = False

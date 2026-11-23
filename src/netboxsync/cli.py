@@ -106,8 +106,12 @@ def _ping() -> int:
     else:
         log.warning("Diode NetBox plugin not listed in NetBox status: %s", sorted(plugins))
     client = connect()
-    client.close()
-    log.info("Diode authentication succeeded")
+    log.info("Diode login succeeded")
+    try:
+        client.check_channel()
+    finally:
+        client.close()
+    log.info("Diode gRPC channel connected")
     return EXIT_OK
 
 

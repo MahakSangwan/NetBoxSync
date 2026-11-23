@@ -16,10 +16,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+import grpc
 from netboxlabs.diode.sdk.chunking import create_message_chunks
 from netboxlabs.diode.sdk.client import DiodeClient, DiodeDryRunClient
 
 from netboxsync import __version__
+from netboxsync.tls import warn_if_overridden
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,9 @@ TAG = "netboxsync"
 #: e.g. grpc://netbox.example.net:8080/diode; DIODE_CLIENT_ID and
 #: DIODE_CLIENT_SECRET are read by the Diode SDK itself.
 DIODE_TARGET_ENV = "DIODE_TARGET"
+#: CA (or self-signed certificate) for both the login and gRPC; read by the
+#: Diode SDK itself, we only use the name for the override warning (D14).
+DIODE_CERT_FILE_ENV = "DIODE_CERT_FILE"
 
 
 class IngestError(Exception):
@@ -46,13 +51,34 @@ def new_run_id() -> str:
 
 
 class DiodeIngester:
-    """The real Diode client. Creating it authenticates (OAuth client credentials)."""
+    """The real Diode client.
+
+    Creating it logs in: an HTTPS (or HTTP, for grpc://) POST to the target's
+    `/auth/token`, made with `requests`. The gRPC channel only connects on
+    first use; `check_channel()` forces that, so TLS problems on the two
+    connections show up separately.
+    """
 
     def __init__(self, target: str) -> None:
+        self.target = target
+        warn_if_overridden(DIODE_CERT_FILE_ENV)
         try:
             self._client = DiodeClient(target=target, app_name=APP_NAME, app_version=__version__)
         except Exception as exc:  # the SDK raises several unrelated types here
-            raise IngestError(f"Diode connection to {target} failed: {exc}") from exc
+            raise IngestError(
+                f"Diode login (POST .../auth/token) for {target} failed: {exc}"
+            ) from exc
+
+    def check_channel(self, timeout: float = 15.0) -> None:
+        """Connect the gRPC channel (TCP + TLS) without sending a request."""
+        try:
+            grpc.channel_ready_future(self._client.channel).result(timeout=timeout)
+        except grpc.FutureTimeoutError:
+            raise IngestError(
+                f"Diode gRPC channel to {self.target} not ready after {timeout:.0f}s: "
+                "unreachable, or TLS failed. For the reason, rerun with "
+                "GRPC_VERBOSITY=debug GRPC_TRACE=handshaker"
+            ) from None
 
     def ingest(self, entities: Any, *, metadata: dict[str, Any] | None = None) -> Any:
         return self._client.ingest(entities=entities, metadata=metadata)

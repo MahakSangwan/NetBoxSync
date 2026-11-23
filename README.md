@@ -21,11 +21,15 @@ Environment:
 | Variable | Used by | |
 |---|---|---|
 | `NETBOX_URL`, `NETBOX_TOKEN` | `ping`, `check`, `ingest` | Read-only token is enough |
-| `REQUESTS_CA_BUNDLE` | NetBox | Only for a private CA |
+| `NETBOX_CA_FILE` | NetBox | CA or self-signed cert, if not publicly trusted |
 | `DIODE_TARGET` | `ping`, `ingest` | e.g. `grpc://netbox.example.net:8080/diode` |
 | `DIODE_CLIENT_ID`, `DIODE_CLIENT_SECRET` | `ping`, `ingest` | Read by the Diode SDK |
-| `DIODE_CERT_FILE`, `DIODE_SKIP_TLS_VERIFY` | Diode | Optional, read by the Diode SDK |
+| `DIODE_CERT_FILE` | Diode | CA or self-signed cert, for both the login and gRPC; read by the Diode SDK |
+| `DIODE_SKIP_TLS_VERIFY` | Diode | Optional, read by the Diode SDK; avoid |
 | `NETBOXSYNC_KEY_PASSPHRASE` | `collect` | Only if the SSH key has one |
+
+Leave `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` unset: `requests` lets them
+override both CA files above (D14).
 
 One YAML file per device: see
 [examples/device.example.yaml](examples/device.example.yaml).
