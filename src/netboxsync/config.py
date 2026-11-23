@@ -70,7 +70,8 @@ class DeviceFile(_Strict):
     #: Lowest rack unit the device occupies.
     position: float | None = Field(default=None, gt=0)
     face: Literal["front", "rear"] | None = None
-    role: Name | None = None
+    #: NetBox requires one; required here so Diode never fills in a placeholder.
+    role: Name
     status: DeviceStatus = DeviceStatus.ACTIVE
     #: Interface holding the management (primary) IP, when it isn't mgmt0 (D6).
     management_interface: Name | None = None

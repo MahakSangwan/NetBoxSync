@@ -34,6 +34,10 @@ DIODE_TARGET_ENV = "DIODE_TARGET"
 #: CA (or self-signed certificate) for both the login and gRPC; read by the
 #: Diode SDK itself, we only use the name for the override warning (D14).
 DIODE_CERT_FILE_ENV = "DIODE_CERT_FILE"
+#: Turns off certificate checks on both Diode connections; read by the SDK.
+DIODE_SKIP_TLS_VERIFY_ENV = "DIODE_SKIP_TLS_VERIFY"
+#: The values the SDK treats as set.
+_TRUE = frozenset({"true", "1", "yes", "on"})
 
 
 class IngestError(Exception):
@@ -62,6 +66,7 @@ class DiodeIngester:
     def __init__(self, target: str) -> None:
         self.target = target
         warn_if_overridden(DIODE_CERT_FILE_ENV)
+        warn_if_tls_verify_skipped()
         try:
             self._client = DiodeClient(target=target, app_name=APP_NAME, app_version=__version__)
         except Exception as exc:  # the SDK raises several unrelated types here
@@ -85,6 +90,17 @@ class DiodeIngester:
 
     def close(self) -> None:
         self._client.close()  # type: ignore[no-untyped-call]
+
+
+def warn_if_tls_verify_skipped() -> None:
+    """Warn when the Diode SDK will skip certificate checks (D16)."""
+    if os.environ.get(DIODE_SKIP_TLS_VERIFY_ENV, "").lower() in _TRUE:
+        log.warning(
+            "%s is set: the Diode login and gRPC connection don't check certificates; "
+            "unset it and use %s for a private CA",
+            DIODE_SKIP_TLS_VERIFY_ENV,
+            DIODE_CERT_FILE_ENV,
+        )
 
 
 def connect() -> DiodeIngester:

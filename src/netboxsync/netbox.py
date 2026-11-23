@@ -23,6 +23,9 @@ NETBOX_URL_ENV = "NETBOX_URL"
 NETBOX_TOKEN_ENV = "NETBOX_TOKEN"
 #: CA (or self-signed certificate) for NetBox's HTTPS, when not publicly trusted.
 NETBOX_CA_FILE_ENV = "NETBOX_CA_FILE"
+#: Unique custom field on devices holding the chassis serial: how Diode finds
+#: a device again after its hostname changes (D18). Created in NetBox by hand.
+CHASSIS_SERIAL_FIELD = "chassis_serial"
 
 
 class NetBoxError(Exception):
@@ -40,6 +43,45 @@ class Ref:
     region_id: int | None = None
 
 
+@dataclass(frozen=True)
+class DeviceRecord:
+    """A NetBox device, with its references by name (what the slices compare)."""
+
+    id: int
+    name: str
+    serial: str
+    chassis_serial: str | None
+    status: str | None
+    site_id: int | None
+    site: str | None
+    location: str | None
+    rack_id: int | None
+    rack: str | None
+    position: float | None
+    face: str | None
+    role: str | None
+    device_type_id: int | None
+    device_type: str | None
+    platform: str | None
+
+
+@dataclass(frozen=True)
+class DeviceTypeRecord:
+    id: int
+    model: str
+    manufacturer: str | None
+    u_height: float
+    is_full_depth: bool
+
+
+@dataclass(frozen=True)
+class CustomFieldRecord:
+    name: str
+    object_types: frozenset[str]
+    type: str | None
+    unique: bool
+
+
 class NetBoxReader(Protocol):
     def find(
         self, kind: Creatable, name: str, *, site_id: int | None = None, ignore_case: bool = False
@@ -50,6 +92,23 @@ class NetBoxReader(Protocol):
     def status(self) -> dict[str, Any]:
         """NetBox's /api/status/ document."""
         ...
+
+    def devices(
+        self,
+        *,
+        name: str | None = None,
+        site_id: int | None = None,
+        rack_id: int | None = None,
+        chassis_serial: str | None = None,
+    ) -> list[DeviceRecord]:
+        """Devices matching every filter given; `name` ignores case."""
+        ...
+
+    def device_types(
+        self, *, model: str | None = None, type_id: int | None = None
+    ) -> list[DeviceTypeRecord]: ...
+
+    def custom_field(self, name: str) -> CustomFieldRecord | None: ...
 
 
 class PynetboxReader:
@@ -97,6 +156,64 @@ class PynetboxReader:
         except pynetbox.RequestError as exc:
             raise NetBoxError(f"NetBox status failed: {exc}") from exc
 
+    def devices(
+        self,
+        *,
+        name: str | None = None,
+        site_id: int | None = None,
+        rack_id: int | None = None,
+        chassis_serial: str | None = None,
+    ) -> list[DeviceRecord]:
+        filters: dict[str, Any] = {
+            key: value
+            for key, value in {
+                "name__ie": name,
+                "site_id": site_id,
+                "rack_id": rack_id,
+                f"cf_{CHASSIS_SERIAL_FIELD}": chassis_serial,
+            }.items()
+            if value is not None
+        }
+        if not filters:
+            raise ValueError("devices() needs at least one filter")
+        records = self._list("devices", lambda: self._api.dcim.devices.filter(**filters))
+        return [_device(dict(r)) for r in records]
+
+    def device_types(
+        self, *, model: str | None = None, type_id: int | None = None
+    ) -> list[DeviceTypeRecord]:
+        filters: dict[str, Any] = {}
+        if model is not None:
+            filters["model"] = model
+        if type_id is not None:
+            filters["id"] = type_id
+        if not filters:
+            raise ValueError("device_types() needs at least one filter")
+        records = self._list("device types", lambda: self._api.dcim.device_types.filter(**filters))
+        return [_device_type(dict(r)) for r in records]
+
+    def custom_field(self, name: str) -> CustomFieldRecord | None:
+        records = self._list(
+            "custom fields", lambda: self._api.extras.custom_fields.filter(name=name)
+        )
+        for record in records:
+            data = dict(record)
+            if data.get("name") == name:
+                return CustomFieldRecord(
+                    name=name,
+                    object_types=frozenset(data.get("object_types") or ()),
+                    type=_value(data.get("type")),
+                    unique=bool(data.get("unique")),
+                )
+        return None
+
+    @staticmethod
+    def _list(what: str, query: Callable[[], Any]) -> list[Any]:
+        try:
+            return list(query())
+        except pynetbox.RequestError as exc:
+            raise NetBoxError(f"NetBox lookup of {what} failed: {exc}") from exc
+
 
 def _ref(data: dict[str, Any]) -> Ref:
     # serialize() turns nested objects into their IDs.
@@ -109,12 +226,55 @@ def _ref(data: dict[str, Any]) -> Ref:
     )
 
 
+def _value(choice: Any) -> Any:
+    """A choice field's value: NetBox returns {"value": ..., "label": ...}."""
+    return choice.get("value") if isinstance(choice, dict) else choice
+
+
+def _nested(obj: Any, key: str = "name") -> Any:
+    return obj.get(key) if isinstance(obj, dict) else None
+
+
+def _device(data: dict[str, Any]) -> DeviceRecord:
+    position = data.get("position")
+    return DeviceRecord(
+        id=data["id"],
+        name=data.get("name") or "",
+        serial=data.get("serial") or "",
+        chassis_serial=(data.get("custom_fields") or {}).get(CHASSIS_SERIAL_FIELD),
+        status=_value(data.get("status")),
+        site_id=_nested(data.get("site"), "id"),
+        site=_nested(data.get("site")),
+        location=_nested(data.get("location")),
+        rack_id=_nested(data.get("rack"), "id"),
+        rack=_nested(data.get("rack")),
+        position=float(position) if position is not None else None,
+        face=_value(data.get("face")),
+        role=_nested(data.get("role")),
+        device_type_id=_nested(data.get("device_type"), "id"),
+        device_type=_nested(data.get("device_type"), "model"),
+        platform=_nested(data.get("platform")),
+    )
+
+
+def _device_type(data: dict[str, Any]) -> DeviceTypeRecord:
+    return DeviceTypeRecord(
+        id=data["id"],
+        model=data["model"],
+        manufacturer=_nested(data.get("manufacturer")),
+        u_height=float(data.get("u_height", 1.0)),
+        is_full_depth=bool(data.get("is_full_depth", True)),
+    )
+
+
 @dataclass
 class CheckReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     #: What the ingest will create.
     creates: list[str] = field(default_factory=list)
+    #: Existing objects the ingest will change, and how.
+    updates: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -211,7 +371,6 @@ def check_device_file(device_file: DeviceFile, reader: NetBoxReader) -> CheckRep
                     f"location {df.location!r}"
                 )
 
-    if df.role:
-        lookup(Creatable.ROLE, df.role)
+    lookup(Creatable.ROLE, df.role)
 
     return report

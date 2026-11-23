@@ -51,6 +51,7 @@ def device_file(**overrides: object) -> DeviceFile:
         "username": "netops@10.0.0.5@psm.example.net",
         "key_file": "~/.ssh/id_ed25519",
         "site": "NYC-DC01",
+        "role": "core-switch",
     }
     data.update(overrides)
     return DeviceFile.model_validate(data)

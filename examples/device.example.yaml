@@ -13,7 +13,7 @@ location: Hall-A                    # optional
 rack: A-12                          # optional
 position: 30                        # optional; needs rack and face
 face: front                         # front | rear
-role: core-switch                   # optional
+role: core-switch                   # required
 status: active                      # default: active
 management_interface: mgmt0         # optional; needed when there's no mgmt0 (D6)
 

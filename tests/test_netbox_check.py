@@ -3,15 +3,33 @@ from typing import Any
 import pytest
 
 from netboxsync.config import Creatable
-from netboxsync.netbox import CheckReport, Ref, check_device_file
+from netboxsync.netbox import (
+    CHASSIS_SERIAL_FIELD,
+    CheckReport,
+    CustomFieldRecord,
+    DeviceRecord,
+    DeviceTypeRecord,
+    Ref,
+    check_device_file,
+)
 from tests.conftest import device_file
 
 
 class FakeNetBox:
     """In-memory NetBox: objects per kind; matches like NetBox's name filters."""
 
-    def __init__(self, objects: dict[Creatable, list[Ref]]) -> None:
+    def __init__(
+        self,
+        objects: dict[Creatable, list[Ref]],
+        *,
+        devices: list[DeviceRecord] | None = None,
+        device_types: list[DeviceTypeRecord] | None = None,
+        custom_fields: list[CustomFieldRecord] | None = None,
+    ) -> None:
         self.objects = objects
+        self.device_list = devices or []
+        self.type_list = device_types or []
+        self.custom_fields = custom_fields if custom_fields is not None else [CHASSIS_SERIAL]
 
     def find(
         self, kind: Creatable, name: str, *, site_id: int | None = None, ignore_case: bool = False
@@ -27,6 +45,40 @@ class FakeNetBox:
 
     def status(self) -> dict[str, Any]:
         return {}
+
+    def devices(
+        self,
+        *,
+        name: str | None = None,
+        site_id: int | None = None,
+        rack_id: int | None = None,
+        chassis_serial: str | None = None,
+    ) -> list[DeviceRecord]:
+        return [
+            d
+            for d in self.device_list
+            if (name is None or d.name.lower() == name.lower())
+            and (site_id is None or d.site_id == site_id)
+            and (rack_id is None or d.rack_id == rack_id)
+            and (chassis_serial is None or d.chassis_serial == chassis_serial)
+        ]
+
+    def device_types(
+        self, *, model: str | None = None, type_id: int | None = None
+    ) -> list[DeviceTypeRecord]:
+        return [
+            t
+            for t in self.type_list
+            if (model is None or t.model == model) and (type_id is None or t.id == type_id)
+        ]
+
+    def custom_field(self, name: str) -> CustomFieldRecord | None:
+        return next((cf for cf in self.custom_fields if cf.name == name), None)
+
+
+CHASSIS_SERIAL = CustomFieldRecord(
+    name=CHASSIS_SERIAL_FIELD, object_types=frozenset({"dcim.device"}), type="text", unique=True
+)
 
 
 NETBOX = FakeNetBox(

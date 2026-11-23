@@ -44,7 +44,6 @@ def test_defaults() -> None:
     df = device_file()
     assert df.status is DeviceStatus.ACTIVE
     assert df.create == frozenset()
-    assert df.role is None
     assert df.management_interface is None
 
 
@@ -125,3 +124,8 @@ def test_empty_device_types_file(write_yaml: Callable[..., Path]) -> None:
 def test_invalid_device_types(write_yaml: Callable[..., Path], entry: str) -> None:
     with pytest.raises(ConfigError):
         load_device_types_file(write_yaml(f"device_types:\n  X: {entry}\n", "t.yaml"))
+
+
+def test_role_is_required(write_yaml: Callable[[str], Path]) -> None:
+    with pytest.raises(ConfigError, match="role"):
+        load_device_file(write_yaml(FULL.replace("role: core-switch\n", "")))

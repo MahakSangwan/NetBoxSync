@@ -39,6 +39,8 @@ from netsdk.core import Device, InventoryItem, IPAddress
 class Driver:
     name: str
     device_class: type[Device]
+    #: OS family; the platform family is "<vendor> <os_family>" (D10).
+    os_family: str
     #: Getter name without `get_` (in collection order) -> return type.
     getters: Mapping[str, Any]
 
@@ -47,6 +49,7 @@ DRIVERS: Mapping[str, Driver] = {
     "cisco-ios": Driver(
         name="cisco-ios",
         device_class=CiscoIOS,
+        os_family="IOS",  # IOS-XE too: same driver (D17)
         getters={
             "facts": IOSFacts,
             "interfaces": list[IOSInterface],
@@ -61,6 +64,7 @@ DRIVERS: Mapping[str, Driver] = {
     "cisco-nxos": Driver(
         name="cisco-nxos",
         device_class=CiscoNXOS,
+        os_family="NX-OS",
         getters={
             "facts": NXOSFacts,
             "interfaces": list[NXOSInterface],

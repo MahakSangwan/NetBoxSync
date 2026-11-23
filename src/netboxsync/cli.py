@@ -9,15 +9,29 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from netboxsync import __version__
+from netboxsync import __version__, devices
 from netboxsync.collect import CollectError, collect, open_device
-from netboxsync.config import ConfigError, DeviceFile, load_device_file
+from netboxsync.config import (
+    ConfigError,
+    DeviceFile,
+    DeviceTypesFile,
+    load_device_file,
+    load_device_types_file,
+)
 from netboxsync.diode import DryRunIngester, IngestError, connect, new_run_id, send
 from netboxsync.drivers import DRIVERS
-from netboxsync.ingest import build_entities
-from netboxsync.netbox import CheckReport, NetBoxError, PynetboxReader, check_device_file
+from netboxsync.ingest import build_entities, check_snapshot
+from netboxsync.inputs import IngestInput
+from netboxsync.netbox import (
+    CheckReport,
+    NetBoxError,
+    NetBoxReader,
+    PynetboxReader,
+    check_device_file,
+)
 from netboxsync.snapshot import (
     GetterStatus,
+    Snapshot,
     SnapshotError,
     latest_snapshot_path,
     read_snapshot,
@@ -27,6 +41,9 @@ from netboxsync.snapshot import (
 log = logging.getLogger("netboxsync")
 
 EXIT_OK, EXIT_FAILED, EXIT_INPUT = 0, 1, 2
+
+#: Looked for next to the device file when --device-types isn't given.
+DEVICE_TYPES_FILE = "device_types.yaml"
 
 
 def device_label(path: Path) -> str:
@@ -42,8 +59,11 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("ping", help="check NetBox and Diode are reachable and the credentials work")
 
-    p = sub.add_parser("check", help="check a device file's references against NetBox")
+    p = sub.add_parser(
+        "check", help="check a device file (and its latest snapshot, if any) against NetBox"
+    )
     p.add_argument("device_file", type=Path)
+    _snapshot_args(p)
 
     p = sub.add_parser("collect", help="run every getter on a device and save a snapshot")
     p.add_argument("device_file", type=Path)
@@ -52,10 +72,13 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("ingest", help="send a snapshot to NetBox through Diode")
     p.add_argument("device_file", type=Path)
+    _snapshot_args(p)
     p.add_argument(
-        "--snapshot", default="latest", help="snapshot file, or 'latest' (default) for the newest"
+        "--verify-timeout",
+        type=float,
+        default=60.0,
+        help="seconds to wait for NetBox to show the ingested device (default 60)",
     )
-    p.add_argument("--snapshot-dir", type=Path, default=Path("snapshots"))
     p.add_argument(
         "--dry-run", action="store_true", help="write the Diode requests as JSON, don't send"
     )
@@ -64,6 +87,18 @@ def _parser() -> argparse.ArgumentParser:
         "--no-check", action="store_true", help="skip the NetBox check (only with --dry-run)"
     )
     return parser
+
+
+def _snapshot_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--snapshot", default="latest", help="snapshot file, or 'latest' (default) for the newest"
+    )
+    p.add_argument("--snapshot-dir", type=Path, default=Path("snapshots"))
+    p.add_argument(
+        "--device-types",
+        type=Path,
+        help=f"device types file (default: {DEVICE_TYPES_FILE} next to the device file, if any)",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -82,7 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             case "ping":
                 return _ping()
             case "check":
-                return _check(load_device_file(args.device_file), device_label(args.device_file))
+                return _check_command(args)
             case "collect":
                 return _collect(args)
             case "ingest":
@@ -118,20 +153,73 @@ def _ping() -> int:
 def _report(label: str, report: CheckReport) -> None:
     for line in report.creates:
         log.info("%s: will create %s", label, line)
+    for line in report.updates:
+        log.info("%s: will update %s", label, line)
     for line in report.warnings:
         log.warning("%s: %s", label, line)
     for line in report.errors:
         log.error("%s: %s", label, line)
 
 
-def _check(device_file: DeviceFile, label: str) -> int:
-    report = check_device_file(device_file, PynetboxReader.from_env())
+def _check(
+    device_file: DeviceFile, label: str, inp: IngestInput | None, reader: NetBoxReader
+) -> int:
+    report = check_device_file(device_file, reader)
+    if inp is not None and report.ok:
+        # Device checks look up the site and rack, so only once they're right.
+        check_snapshot(inp, reader, report)
     _report(label, report)
     if not report.ok:
         log.error("%s: check failed (%d errors)", label, len(report.errors))
         return EXIT_FAILED
     log.info("%s: check passed", label)
     return EXIT_OK
+
+
+def _check_command(args: argparse.Namespace) -> int:
+    device_file = load_device_file(args.device_file)
+    label = device_label(args.device_file)
+    try:
+        inp: IngestInput | None = _input(args, device_file, label)
+    except SnapshotError as exc:
+        if args.snapshot != "latest":
+            raise
+        log.warning("%s: %s; checking the device file only", label, exc)
+        inp = None
+    return _check(device_file, label, inp, PynetboxReader.from_env())
+
+
+def _device_types(args: argparse.Namespace) -> DeviceTypesFile:
+    if args.device_types is not None:
+        return load_device_types_file(args.device_types)
+    default = args.device_file.parent / DEVICE_TYPES_FILE
+    if default.is_file():
+        log.info("using device types from %s", default)
+        return load_device_types_file(default)
+    return DeviceTypesFile()
+
+
+def _snapshot(
+    args: argparse.Namespace, device_file: DeviceFile, label: str
+) -> tuple[Path, Snapshot]:
+    path = (
+        latest_snapshot_path(args.snapshot_dir, label)
+        if args.snapshot == "latest"
+        else Path(args.snapshot)
+    )
+    snapshot = read_snapshot(path)
+    if snapshot.device_label != label or snapshot.driver != device_file.driver:
+        raise SnapshotError(
+            f"{path} is {snapshot.device_label!r} ({snapshot.driver}), "
+            f"not {label!r} ({device_file.driver})"
+        )
+    log.info("%s: using snapshot %s (collected %s)", label, path, snapshot.collected_at)
+    return path, snapshot
+
+
+def _input(args: argparse.Namespace, device_file: DeviceFile, label: str) -> IngestInput:
+    _, snapshot = _snapshot(args, device_file, label)
+    return IngestInput(device_file, snapshot, _device_types(args))
 
 
 def _collect(args: argparse.Namespace) -> int:
@@ -151,23 +239,14 @@ def _collect(args: argparse.Namespace) -> int:
 def _ingest(args: argparse.Namespace) -> int:
     device_file = load_device_file(args.device_file)
     label = device_label(args.device_file)
-    path = (
-        latest_snapshot_path(args.snapshot_dir, label)
-        if args.snapshot == "latest"
-        else Path(args.snapshot)
-    )
-    snapshot = read_snapshot(path)
-    if snapshot.device_label != label or snapshot.driver != device_file.driver:
-        raise SnapshotError(
-            f"{path} is {snapshot.device_label!r} ({snapshot.driver}), "
-            f"not {label!r} ({device_file.driver})"
-        )
-    log.info("%s: using snapshot %s (collected %s)", label, path, snapshot.collected_at)
+    path, snapshot = _snapshot(args, device_file, label)
+    inp = IngestInput(device_file, snapshot, _device_types(args))
 
-    if not args.no_check and _check(device_file, label) != EXIT_OK:
+    reader = None if args.no_check else PynetboxReader.from_env()
+    if reader is not None and _check(device_file, label, inp, reader) != EXIT_OK:
         return EXIT_FAILED
 
-    entities = build_entities(device_file, snapshot)
+    entities = build_entities(inp)
     run_id = new_run_id()
     if args.dry_run:
         dry = DryRunIngester(args.dry_run_dir)
@@ -177,15 +256,44 @@ def _ingest(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if not entities:
-        log.info("%s: no slices produce entities yet; nothing sent", label)
+        log.info("%s: no slices produce entities; nothing sent", label)
         return EXIT_OK
+    assert reader is not None  # --no-check is refused without --dry-run
     client = connect()
     try:
         send(client, entities, run_id=run_id, device_label=label, snapshot=path)
     finally:
         client.close()
-    log.info("%s: ingest accepted by Diode (run %s); verify in NetBox", label, run_id)
-    return EXIT_OK
+    log.info("%s: ingest accepted by Diode (run %s); reading it back", label, run_id)
+    return _verify(inp, reader, label, run_id, args.verify_timeout)
+
+
+def _verify(inp: IngestInput, reader: NetBoxReader, label: str, run_id: str, timeout: float) -> int:
+    result = devices.verify(inp, reader, timeout=timeout)
+    if result.ok:
+        assert result.device is not None
+        log.info(
+            "%s: NetBox shows device #%d %r as sent", label, result.device.id, result.device.name
+        )
+        return EXIT_OK
+    if result.device is None:
+        log.error(
+            "%s: after %.0fs NetBox has no device with chassis serial %r; Diode may still be "
+            "working, or rejected it: look up run %s in Diode",
+            label,
+            timeout,
+            inp.facts.serial_number,
+            run_id,
+        )
+    else:
+        for key, (want, have) in result.differences.items():
+            log.error(
+                "%s: device #%d %s is %r, expected %r", label, result.device.id, key, have, want
+            )
+        log.error(
+            "%s: NetBox doesn't match what was sent after %.0fs (run %s)", label, timeout, run_id
+        )
+    return EXIT_FAILED
 
 
 if __name__ == "__main__":
